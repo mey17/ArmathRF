@@ -1661,16 +1661,20 @@ int32_t mySeek(PNGFILE *handle, int32_t position) {
 // Function to draw pixels to the display
 int16_t xpos = 0;
 int16_t ypos = 0;
-void PNGDraw(PNGDRAW *pDraw) {
+int PNGDraw(PNGDRAW *pDraw) {
     uint16_t usPixels[320];
-    // static uint16_t dmaBuffer[MAX_IMAGE_WIDTH]; // static so buffer persists after fn exit
     uint8_t r = ((uint16_t)bruceConfig.bgColor & 0xF800) >> 8;
     uint8_t g = ((uint16_t)bruceConfig.bgColor & 0x07E0) >> 3;
     uint8_t b = ((uint16_t)bruceConfig.bgColor & 0x001F) << 3;
+
+    // Get the line of pixels in RGB565 format
     png->getLineAsRGB565(pDraw, usPixels, PNG_RGB565_BIG_ENDIAN, b << 16 | g << 8 | r);
-    tft.drawPixel(0, 0, 0);
-    tft.drawPixel(0, 0, 0);
+
+    // Draw the line of pixels on the display
     tft.pushImage(xpos, ypos + pDraw->y, pDraw->iWidth, 1, usPixels);
+
+    // Return 0 to indicate success
+    return 0;
 }
 
 bool drawPNG(FS &fs, String filename, int x, int y, bool center) {
@@ -1678,38 +1682,28 @@ bool drawPNG(FS &fs, String filename, int x, int y, bool center) {
     _fs = &fs;
     uint32_t dt = millis();
 
-    // After starting WebUI, it is not possible to draw PNGs anymore, because there are no RAM memoty
-    // available Need to fin out a way to make it work
+    // Replace the file path with your new logo file
+    filename = "/new_logo.png";
+
     void *mem = psramFound() ? ps_malloc(sizeof(PNG)) : malloc(sizeof(PNG));
     if (!mem) {
         Serial.println("Fail alloc PNG!");
-        bruceConfig.theme.label = true;
         return false;
     }
 
     png = new (mem) PNG();
     int16_t rc = png->open(filename.c_str(), myOpen, myClose, myRead, mySeek, PNGDraw);
     if (rc == PNG_SUCCESS) {
-        // Serial.printf("image specs: (%d x %d), %d bpp, pixel type: %d\n", png->getWidth(),
-        // png->getHeight(), png->getBpp(), png->getPixelType());
-
         if (center) {
             xpos = x + (tftWidth - png->getWidth()) / 2;
             ypos = y + (tftHeight - png->getHeight()) / 2;
         }
-
-        if (png->getWidth() > MAX_IMAGE_WIDTH) {
-            Serial.println("Image too wide for allocated line buffer size!");
-        } else {
-            rc = png->decode(NULL, 0);
-            png->close();
-        }
-        // How long did rendering take...
+        rc = png->decode(NULL, 0);
+        png->close();
         Serial.print("PNG Loaded in ");
         Serial.print(millis() - dt);
         Serial.println("ms");
     } else {
-    ERROR:
         delete png;
         return false;
     }
